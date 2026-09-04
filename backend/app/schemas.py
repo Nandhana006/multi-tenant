@@ -17,7 +17,9 @@ class RegisterRequest(BaseModel):
     name: str
     email: str
     password: str
-    invite_code: str
+    invite_code: Optional[str] = None
+    company_id: Optional[str] = None
+    role: Optional[str] = "EMPLOYEE"
 
 class CreateEmployeeRequest(BaseModel):
     name: str

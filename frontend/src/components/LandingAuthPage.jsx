@@ -99,6 +99,7 @@ export default function LandingAuthPage() {
       name: empName.trim(),
       email: empEmail.trim(),
       password: empPassword.trim(),
+      invite_code: code,
       company_id: compId,
       role: "EMPLOYEE"
     });

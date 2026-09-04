@@ -102,6 +102,7 @@ export default function DemoLoginCards({
       name: regName,
       email: regEmail,
       password: regPassword,
+      invite_code: regInviteCode.trim().toUpperCase(),
       company_id: selectedCompany?.id || "comp_apex",
       role: regRole
     });

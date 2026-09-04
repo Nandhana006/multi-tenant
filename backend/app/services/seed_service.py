@@ -96,9 +96,17 @@ def seed_database_and_vectors(db: Session):
     for comp in COMPANIES_DATA:
         existing = db.query(Company).filter(Company.id == comp["id"]).first()
         if not existing:
-            new_comp = Company(id=comp["id"], name=comp["name"], industry=comp["industry"])
+            new_comp = Company(
+                id=comp["id"],
+                name=comp["name"],
+                industry=comp["industry"],
+                invite_code=comp.get("invite_code")
+            )
             db.add(new_comp)
             logger.info(f" Seeded company: {comp['name']}")
+        else:
+            if not existing.invite_code and comp.get("invite_code"):
+                existing.invite_code = comp.get("invite_code")
     db.commit()
 
     # 2. Seed Users & Update Names to Indian Personas

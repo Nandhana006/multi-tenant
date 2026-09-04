@@ -45,14 +45,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Mount API routes
+# Mount API routes with /api prefix
 app.include_router(auth.router, prefix=settings.API_V1_STR)
 app.include_router(companies.router, prefix=settings.API_V1_STR)
 app.include_router(documents.router, prefix=settings.API_V1_STR)
 app.include_router(chat.router, prefix=settings.API_V1_STR)
 app.include_router(admin.router, prefix=settings.API_V1_STR)
 
-@app.get("/")
+# Also mount routes without /api prefix for maximum deployment resilience
+app.include_router(auth.router)
+app.include_router(companies.router)
+app.include_router(documents.router)
+app.include_router(chat.router)
+app.include_router(admin.router)
+
+@app.api_route("/", methods=["GET", "HEAD"])
 def root():
     return {
         "name": settings.PROJECT_NAME,
@@ -62,7 +69,7 @@ def root():
         "multi_tenant_isolation": "ENFORCED"
     }
 
-@app.get("/health")
+@app.api_route("/health", methods=["GET", "HEAD"])
 def health():
     return {
         "status": "healthy",

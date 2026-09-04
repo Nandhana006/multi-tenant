@@ -86,16 +86,88 @@ def login(req: LoginRequest, request: Request, db: Session = Depends(get_db)):
     return TokenResponse(access_token=access_token, user=user_resp)
 
 
-@router.post("/register")
-def register(request: Request):
+@router.post("/register", response_model=TokenResponse)
+def register(req: RegisterRequest, request: Request, db: Session = Depends(get_db)):
     """
-    Self-registration is disabled per enterprise governance.
-    Employee accounts must be provisioned directly by an authorized HR Manager via the HR Portal.
+    Register an employee account with a valid company invite code or company ID.
     """
-    raise HTTPException(
-        status_code=status.HTTP_403_FORBIDDEN,
-        detail="Self-registration is disabled. Employee accounts must be provisioned directly by an authorized HR Manager via the HR Portal."
+    email = req.email.strip().lower()
+    existing_user = db.query(User).filter(User.email == email).first()
+    if existing_user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="An account with this email address already exists."
+        )
+
+    # Locate company via invite code or company_id
+    company = None
+    if req.invite_code and req.invite_code.strip():
+        code = req.invite_code.strip().upper()
+        company = db.query(Company).filter(Company.invite_code == code).first()
+        if not company:
+            # Fallback: check if invite_code was passed as company_id (e.g. comp_apex)
+            company = db.query(Company).filter(Company.id == req.invite_code.strip().lower()).first()
+
+    if not company and req.company_id:
+        company = db.query(Company).filter(Company.id == req.company_id.strip()).first()
+
+    if not company:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid company invite code. Please enter a valid invite code (e.g. APEX-2026, NEXUS-2026, GLOBAL-2026) provided by your HR."
+        )
+
+    user_role = UserRole.EMPLOYEE.value
+    if req.role and req.role.upper() in [UserRole.EMPLOYEE.value, UserRole.HR.value]:
+        user_role = req.role.upper()
+
+    user_id = f"user_{uuid.uuid4().hex[:10]}"
+    new_user = User(
+        id=user_id,
+        name=req.name.strip(),
+        email=email,
+        password_hash=get_password_hash(req.password),
+        company_id=company.id,
+        role=user_role
     )
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+
+    token_data = {
+        "sub": new_user.id,
+        "email": new_user.email,
+        "role": new_user.role,
+        "company_id": company.id,
+        "company_name": company.name
+    }
+    access_token = create_access_token(token_data)
+
+    user_resp = UserResponse(
+        id=new_user.id,
+        name=new_user.name,
+        email=new_user.email,
+        company_id=company.id,
+        company_name=company.name,
+        role=new_user.role,
+        created_at=new_user.created_at.isoformat() if new_user.created_at else None
+    )
+
+    client_ip = request.client.host if request.client else "127.0.0.1"
+    user_agent = request.headers.get("user-agent", "Web Browser")
+    mongo_service.log_auth_event(
+        user_id=new_user.id,
+        email=new_user.email,
+        name=new_user.name,
+        role=new_user.role,
+        company_id=company.id,
+        company_name=company.name,
+        event_type="REGISTER_EMPLOYEE",
+        ip_address=client_ip,
+        user_agent=user_agent
+    )
+
+    return TokenResponse(access_token=access_token, user=user_resp)
 
 
 
