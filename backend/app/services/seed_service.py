@@ -2,7 +2,7 @@
 import logging
 from datetime import datetime
 from sqlalchemy.orm import Session
-from app.models import Company, User, Document, UserRole
+from app.models import Company, User, Document, UserRole, ChatMessage
 from app.services.auth_service import get_password_hash
 from app.services.document_processor import document_processor
 from app.services.embedding_service import embedding_service
@@ -15,7 +15,8 @@ DEMO_PASSWORD = "Demo1234!"
 COMPANIES_DATA = [
     {"id": "comp_apex", "name": "Apex Corp", "industry": "Financial Services & Investment", "invite_code": "APEX-2026"},
     {"id": "comp_nexus", "name": "Nexus Tech", "industry": "Enterprise AI & Cloud Infrastructure", "invite_code": "NEXUS-2026"},
-    {"id": "comp_global", "name": "Global Logistics", "industry": "Supply Chain & Shipping", "invite_code": "GLOBAL-2026"}
+    {"id": "comp_global", "name": "Global Logistics", "industry": "Supply Chain & Shipping", "invite_code": "GLOBAL-2026"},
+    {"id": "comp_polca", "name": "Polca Confections", "industry": "Artisanal Sweets & Confectionery", "invite_code": "POLCA-2026"}
 ]
 
 USERS_DATA = [
@@ -33,6 +34,10 @@ USERS_DATA = [
     # Global Logistics (Company C)
     {"id": "user_global_hr", "name": "Ananya Iyer (HR Director)", "email": "hr.c@demo.com", "company_id": "comp_global", "role": UserRole.HR.value},
     {"id": "user_global_emp", "name": "Rohan Gupta (Operations Manager)", "email": "employee.c@demo.com", "company_id": "comp_global", "role": UserRole.EMPLOYEE.value},
+
+    # Polca Confections (Company D)
+    {"id": "user_polca_hr", "name": "Polcasan (HR Lead)", "email": "polcasan@gmail.com", "company_id": "comp_polca", "role": UserRole.HR.value},
+    {"id": "user_polca_emp", "name": "Maya Sen (Operations Associate)", "email": "employee.polca@demo.com", "company_id": "comp_polca", "role": UserRole.EMPLOYEE.value},
 ]
 
 DEMO_DOCUMENTS = [
@@ -85,6 +90,28 @@ Every new employee receives a $1,200 annual home-office stipend for monitors, er
 
 5. PARENTAL LEAVE
 Nexus Tech provides 18 weeks of 100% paid parental leave for all new parents (birth, adoption, or surrogacy)."""
+    },
+    {
+        "company_id": "comp_polca",
+        "doc_id": "doc_polca_policy",
+        "filename": "Polca Confections - Employee Handbook & Safety Standards 2026.txt",
+        "uploaded_by": "polcasan@gmail.com",
+        "content": """POLCA CONFECTIONS - EMPLOYEE HANDBOOK & SAFETY STANDARDS (2026)
+
+1. ANNUAL LEAVE & PAID TIME OFF
+Polca Confections provides 22 days of paid annual vacation leave per calendar year. Employees also receive 12 fully paid sick and wellness days.
+
+2. WORK SHIFTS & OVERTIME
+Production and fulfillment shifts operate as:
+- Morning Shift: 7:00 AM - 3:30 PM
+- Afternoon Shift: 3:00 PM - 11:30 PM
+All hours worked beyond 40 hours per week are paid at 1.5x regular base pay rate.
+
+3. HEALTHCARE & WORKPLACE SAFETY
+100% employer-covered health and dental insurance including mandatory food safety sanitization screenings and quarterly dental checkups.
+
+4. PRODUCT DISCOUNT & PERKS
+Full-time staff receive a 40% discount on all artisan confections, sweets, and gift sets, plus a $100 monthly sweet voucher."""
     }
 ]
 
@@ -125,7 +152,10 @@ def seed_database_and_vectors(db: Session):
             db.add(new_user)
             logger.info(f" Seeded user: {u['email']} [{u['role']}]")
         else:
-            # Update name if previously seeded with old names
+            # Ensure password hash is always synchronized and up to date
+            existing_user.password_hash = hashed_pwd
+            existing_user.role = u["role"]
+            existing_user.company_id = u["company_id"]
             if existing_user.name != u["name"]:
                 existing_user.name = u["name"]
                 logger.info(f" Updated user name to Indian persona: {u['name']}")
@@ -163,5 +193,69 @@ def seed_database_and_vectors(db: Session):
                 embeddings=embeddings
             )
             logger.info(f" Seeded document & {len(chunks)} vectors: {doc_data['filename']}")
+
+    # 4. Seed Employee AI Conversation History
+    DEMO_CHATS = [
+        {
+            "id": "chat_apex_1",
+            "company_id": "comp_apex",
+            "user_id": "user_apex_emp",
+            "user_name": "Rahul Verma",
+            "question": "How many days of paid annual leave do I have per year?",
+            "answer": "At Apex Corp, you are entitled to 20 days of paid annual leave per calendar year. Leave accrues at a rate of 1.67 days per month. A maximum of 5 unused days can be carried over into the following year, expiring March 31st.",
+            "sources": ["Apex Corp - Employee Leave & Benefits Policy 2026.txt"]
+        },
+        {
+            "id": "chat_apex_2",
+            "company_id": "comp_apex",
+            "user_id": "user_apex_emp",
+            "user_name": "Rahul Verma",
+            "question": "What is our medical insurance coverage under Apex Care?",
+            "answer": "Apex Care covers 80% of eligible medical, dental, and prescription expenses up to an annual maximum of $5,000 per employee. Family coverage is available with a 30% employee copay.",
+            "sources": ["Apex Corp - Employee Leave & Benefits Policy 2026.txt"]
+        },
+        {
+            "id": "chat_nexus_1",
+            "company_id": "comp_nexus",
+            "user_id": "user_nexus_emp",
+            "user_name": "Meera Tiwari",
+            "question": "What is the policy on annual leave rollover?",
+            "answer": "At Nexus Tech, you receive 30 days of paid leave per year. You can roll over up to 10 unused leave days into the next calendar year with zero expiration deadline.",
+            "sources": ["Nexus Tech - Global Benefits & Remote Culture Guide 2026.txt"]
+        },
+        {
+            "id": "chat_nexus_2",
+            "company_id": "comp_nexus",
+            "user_id": "user_nexus_emp",
+            "user_name": "Meera Tiwari",
+            "question": "What equipment stipend do we receive for home office?",
+            "answer": "Every new employee receives a $1,200 annual home-office stipend for monitors, ergonomic seating, or co-working space subscriptions as part of our remote-first culture.",
+            "sources": ["Nexus Tech - Global Benefits & Remote Culture Guide 2026.txt"]
+        },
+        {
+            "id": "chat_polca_1",
+            "company_id": "comp_polca",
+            "user_id": "user_polca_emp",
+            "user_name": "Maya Sen",
+            "question": "What are the confectionery production shifts and holiday schedule?",
+            "answer": "Polca production operates on two shifts: Morning (7:00 AM - 3:30 PM) and Afternoon (3:00 PM - 11:30 PM). Employees receive 22 paid annual leave days and full safety gear allowances.",
+            "sources": ["Polca Confections - Employee Handbook & Safety Standards 2026.txt"]
+        }
+    ]
+
+    for chat in DEMO_CHATS:
+        existing_chat = db.query(ChatMessage).filter(ChatMessage.id == chat["id"]).first()
+        if not existing_chat:
+            new_chat = ChatMessage(
+                id=chat["id"],
+                company_id=chat["company_id"],
+                user_id=chat["user_id"],
+                user_name=chat["user_name"],
+                question=chat["question"],
+                answer=chat["answer"],
+                sources=chat["sources"]
+            )
+            db.add(new_chat)
+    db.commit()
 
     logger.info(" Seed verification complete.")
