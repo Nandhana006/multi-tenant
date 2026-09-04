@@ -1,4 +1,4 @@
-﻿"""Document Ingestion & Text Chunking Engine"""
+"""Document Ingestion & Text Chunking Engine"""
 import io
 import re
 import logging

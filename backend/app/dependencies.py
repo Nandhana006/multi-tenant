@@ -1,4 +1,4 @@
-﻿"""FastAPI Authentication and Authorization Dependencies"""
+"""FastAPI Authentication and Authorization Dependencies"""
 from typing import List
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials

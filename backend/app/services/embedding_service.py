@@ -1,4 +1,4 @@
-﻿"""Local Sentence-Transformers Embedding Service"""
+"""Local Sentence-Transformers Embedding Service"""
 import logging
 from typing import List
 from sentence_transformers import SentenceTransformer

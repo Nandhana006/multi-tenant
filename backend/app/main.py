@@ -1,4 +1,4 @@
-﻿"""FastAPI Application Main Entrypoint"""
+"""FastAPI Application Main Entrypoint"""
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI

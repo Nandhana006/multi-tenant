@@ -1170,14 +1170,15 @@ export default function HRDashboard({ uploadModalOpen, setUploadModalOpen, onNav
                   </div>
                   <div>
                     <span className="text-[#A8A095] block text-[10px] uppercase font-sans font-bold">Portal Access URL</span>
-                    <span className="text-[#6B6259]">http://localhost:5173</span>
+                    <span className="text-[#6B6259]">{typeof window !== "undefined" ? window.location.origin : "http://localhost:5173"}</span>
                   </div>
                 </div>
 
                 <button
                   type="button"
                   onClick={() => {
-                    const text = `HR Multi Account Created!\n\nEmail: ${createdCredentials.email}\nTemporary Password: ${createdCredentials.password}\nPortal Link: http://localhost:5173\n\nPlease log in through the Employee Sign-In portal.`;
+                    const origin = typeof window !== "undefined" ? window.location.origin : "http://localhost:5173";
+                    const text = `HR Multi Account Created!\n\nEmail: ${createdCredentials.email}\nTemporary Password: ${createdCredentials.password}\nPortal Link: ${origin}\n\nPlease log in through the Employee Sign-In portal.`;
                     navigator.clipboard.writeText(text);
                     setCopiedCreds(true);
                     setTimeout(() => setCopiedCreds(false), 2500);

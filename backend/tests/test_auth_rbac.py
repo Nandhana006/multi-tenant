@@ -1,4 +1,4 @@
-﻿"""RBAC and Authentication Unit Tests"""
+"""RBAC and Authentication Unit Tests"""
 import pytest
 from fastapi.testclient import TestClient
 
@@ -32,12 +32,17 @@ def test_employee_cannot_upload(client: TestClient):
     response = client.post("/api/documents/upload", headers=headers, files=files)
     assert response.status_code == 403, f"Expected 403 Forbidden, got {response.status_code}"
 
-def test_employee_cannot_view_documents_list(client: TestClient):
-    """Verify that Employee cannot access HR document listing."""
+def test_employee_can_view_documents_list(client: TestClient):
+    """Verify that Employee can view company policies in read-only mode."""
     emp_token = get_auth_token(client, "employee.a@demo.com")
     headers = {"Authorization": f"Bearer {emp_token}"}
     response = client.get("/api/documents", headers=headers)
-    assert response.status_code == 403
+    assert response.status_code == 200
+
+def test_unauthenticated_cannot_view_documents(client: TestClient):
+    """Verify that unauthenticated user cannot access documents."""
+    response = client.get("/api/documents")
+    assert response.status_code in [401, 403]
 
 def test_employee_cannot_delete(client: TestClient):
     """Verify that Employee cannot delete documents."""

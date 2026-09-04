@@ -1,4 +1,4 @@
-﻿"""Authentication and JWT Token Utilities"""
+"""Authentication and JWT Token Utilities"""
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
 import jwt
