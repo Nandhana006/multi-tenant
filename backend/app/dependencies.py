@@ -2,18 +2,16 @@
 from typing import List
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from sqlalchemy.orm import Session
-from app.database import get_db
-from app.models import User, UserRole
+from app.models import UserRole
+from app.services.db_service import db_service, UserDoc
 from app.services.auth_service import decode_access_token
 
 security = HTTPBearer()
 
 def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
-    db: Session = Depends(get_db)
-) -> User:
-    """Validate JWT token and return authenticated User."""
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+) -> UserDoc:
+    """Validate JWT token and return authenticated User from MongoDB."""
     token = credentials.credentials
     payload = decode_access_token(token)
     if not payload:
@@ -31,7 +29,7 @@ def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    user = db.query(User).filter(User.id == user_id).first()
+    user = db_service.get_user_by_id(user_id)
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -42,7 +40,7 @@ def get_current_user(
 
 def require_role(allowed_roles: List[str]):
     """Role-based authorization dependency guard."""
-    def role_checker(current_user: User = Depends(get_current_user)) -> User:
+    def role_checker(current_user: UserDoc = Depends(get_current_user)) -> UserDoc:
         if current_user.role not in allowed_roles:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,

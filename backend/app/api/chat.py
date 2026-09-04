@@ -1,15 +1,13 @@
-"""Multi-Tenant Chat API Endpoints"""
+"""Multi-Tenant Chat API Endpoints with MongoDB"""
 import uuid
 import logging
 from typing import List, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session
-from app.database import get_db
-from app.models import User, ChatMessage, Company
 from app.schemas import ChatRequest, ChatResponse
 from app.dependencies import get_current_user
 from app.services.rag_service import rag_service
 from app.services.mongo_service import mongo_service
+from app.services.db_service import db_service, UserDoc
 
 logger = logging.getLogger(__name__)
 
@@ -18,8 +16,7 @@ router = APIRouter(prefix="/chat", tags=["Chat & RAG Assistant"])
 @router.post("", response_model=ChatResponse)
 def ask_chat(
     req: ChatRequest,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    current_user: UserDoc = Depends(get_current_user)
 ):
     """
     Ask a question to the AI HR Assistant.
@@ -36,11 +33,10 @@ def ask_chat(
     company_name = current_user.company.name if current_user.company else "Company"
 
     if not company_id:
-        # Super admin fallback
-        comp = db.query(Company).first()
-        if comp:
-            company_id = comp.id
-            company_name = comp.name
+        companies = db_service.get_companies()
+        if companies:
+            company_id = companies[0].id
+            company_name = companies[0].name
         else:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -63,22 +59,20 @@ def ask_chat(
 
     sources_payload = [s.model_dump() for s in response.sources]
 
-    # 1. Save to relational DB
+    # 1. Save to MongoDB via db_service
     try:
         msg_id = f"msg_{uuid.uuid4().hex[:10]}"
-        db_msg = ChatMessage(
-            id=msg_id,
-            company_id=company_id,
-            user_id=current_user.id,
-            user_name=current_user.name,
-            question=req.question.strip(),
-            answer=response.answer,
-            sources=sources_payload
-        )
-        db.add(db_msg)
-        db.commit()
+        db_service.save_chat_message({
+            "id": msg_id,
+            "company_id": company_id,
+            "user_id": current_user.id,
+            "user_name": current_user.name,
+            "question": req.question.strip(),
+            "answer": response.answer,
+            "sources": sources_payload
+        })
     except Exception as e:
-        logger.error(f" Failed to save chat history to relational DB: {e}")
+        logger.error(f" Failed to save chat message to MongoDB: {e}")
 
     # 2. Save full conversation history and grounded citations to MongoDB Atlas
     mongo_service.log_chat_conversation(
@@ -98,32 +92,28 @@ def ask_chat(
 
 @router.get("/history")
 def get_chat_history(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    current_user: UserDoc = Depends(get_current_user)
 ):
-    """Get chat history for current user."""
-    messages = (
-        db.query(ChatMessage)
-        .filter(ChatMessage.user_id == current_user.id)
-        .order_by(ChatMessage.created_at.desc())
-        .limit(50)
-        .all()
-    )
-    return [m.to_dict() for m in reversed(messages)]
+    """Get chat history for current user from MongoDB."""
+    if not current_user.company_id:
+        return []
+    messages = db_service.get_chat_history(company_id=current_user.company_id, user_id=current_user.id, limit=50)
+    return messages
 
 
 @router.delete("/history")
 def clear_chat_history(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    current_user: UserDoc = Depends(get_current_user)
 ):
-    """Clear chat history for current user."""
+    """Clear chat history for current user in MongoDB."""
     try:
-        db.query(ChatMessage).filter(ChatMessage.user_id == current_user.id).delete()
-        db.commit()
+        if db_service.is_connected():
+            db_service.db.chat_messages.delete_many({"user_id": current_user.id})
+        db_service._local_memory["chat_messages"] = [
+            m for m in db_service._local_memory["chat_messages"] if m.get("user_id") != current_user.id
+        ]
         return {"message": "Chat history cleared successfully", "cleared": True}
     except Exception as e:
-        db.rollback()
         logger.error(f"Failed to clear chat history: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

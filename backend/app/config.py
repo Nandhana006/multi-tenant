@@ -1,5 +1,6 @@
 """Application Configuration Settings"""
 import os
+from typing import Optional
 from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from dotenv import load_dotenv
@@ -14,10 +15,7 @@ class Settings(BaseSettings):
     API_V1_STR: str = "/api"
     
     # Database
-    DATABASE_URL: str = os.getenv(
-        "DATABASE_URL",
-        f"sqlite:///{Path(__file__).resolve().parent.parent / 'hr_platform.db'}"
-    )
+    DATABASE_URL: Optional[str] = os.getenv("DATABASE_URL", None)
     
     # Qdrant
     QDRANT_URL: str = os.getenv("QDRANT_URL", "http://localhost:6333")

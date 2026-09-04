@@ -1,26 +1,27 @@
-"""Company API Endpoints"""
+"""Company API Endpoints with MongoDB"""
+import uuid
+from datetime import datetime
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session
-from app.database import get_db
-from app.models import Company, User, Document, UserRole, ChatMessage
+from app.models import UserRole
 from app.schemas import CompanyResponse, CreateEmployeeRequest
 from app.dependencies import get_current_user
 from app.services.auth_service import get_password_hash
 from app.services.mongo_service import mongo_service
-
+from app.services.db_service import db_service, UserDoc
 
 router = APIRouter(prefix="/companies", tags=["Companies"])
 
 @router.get("", response_model=List[CompanyResponse])
-def list_companies(db: Session = Depends(get_db)):
-    """List all registered companies (Public for demo selection / exploration)."""
-    companies = db.query(Company).all()
+def list_companies():
+    """List all registered companies from MongoDB."""
+    companies = db_service.get_companies()
     results = []
     for comp in companies:
-        user_cnt = db.query(User).filter(User.company_id == comp.id).count()
-        doc_cnt = db.query(Document).filter(Document.company_id == comp.id).count()
-        hr_user = db.query(User).filter(User.company_id == comp.id, User.role == "HR").first()
+        user_cnt = db_service.count_users_in_company(comp.id)
+        doc_cnt = db_service.count_documents_in_company(comp.id)
+        company_users = db_service.get_users_by_company(comp.id)
+        hr_user = next((u for u in company_users if u.role == "HR"), None)
         results.append(CompanyResponse(
             id=comp.id,
             name=comp.name,
@@ -28,22 +29,23 @@ def list_companies(db: Session = Depends(get_db)):
             invite_code=comp.invite_code,
             hr_name=hr_user.name if hr_user else "HR Department",
             hr_email=hr_user.email if hr_user else None,
-            created_at=comp.created_at.isoformat() if comp.created_at else None,
+            created_at=comp.created_at,
             user_count=user_cnt,
             document_count=doc_cnt
         ))
     return results
 
 @router.get("/{company_id}", response_model=CompanyResponse)
-def get_company(company_id: str, db: Session = Depends(get_db)):
-    """Get single company details."""
-    comp = db.query(Company).filter(Company.id == company_id).first()
+def get_company(company_id: str):
+    """Get single company details from MongoDB."""
+    comp = db_service.get_company_by_id(company_id)
     if not comp:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Company not found")
     
-    user_cnt = db.query(User).filter(User.company_id == comp.id).count()
-    doc_cnt = db.query(Document).filter(Document.company_id == comp.id).count()
-    hr_user = db.query(User).filter(User.company_id == comp.id, User.role == "HR").first()
+    user_cnt = db_service.count_users_in_company(comp.id)
+    doc_cnt = db_service.count_documents_in_company(comp.id)
+    company_users = db_service.get_users_by_company(comp.id)
+    hr_user = next((u for u in company_users if u.role == "HR"), None)
     
     return CompanyResponse(
         id=comp.id,
@@ -52,23 +54,20 @@ def get_company(company_id: str, db: Session = Depends(get_db)):
         invite_code=comp.invite_code,
         hr_name=hr_user.name if hr_user else "HR Department",
         hr_email=hr_user.email if hr_user else None,
-        created_at=comp.created_at.isoformat() if comp.created_at else None,
+        created_at=comp.created_at,
         user_count=user_cnt,
         document_count=doc_cnt
     )
 
 @router.get("/my/employees")
 def get_company_employees(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    current_user: UserDoc = Depends(get_current_user)
 ):
-    """
-    Get list of all employees in the logged-in HR's company.
-    """
+    """Get list of all employees in the logged-in HR's company."""
     if not current_user.company_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No company associated with user.")
     
-    users = db.query(User).filter(User.company_id == current_user.company_id).order_by(User.created_at.desc()).all()
+    users = db_service.get_users_by_company(current_user.company_id)
     
     return [
         {
@@ -78,26 +77,22 @@ def get_company_employees(
             "role": u.role,
             "company_id": u.company_id,
             "company_name": u.company.name if u.company else None,
-            "created_at": u.created_at.isoformat() if u.created_at else None
+            "created_at": u.created_at
         }
         for u in users
     ]
 
 @router.get("/my/logs")
 def get_company_audit_logs(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    current_user: UserDoc = Depends(get_current_user)
 ):
-    """
-    Get real-time sign-in/out audit logs and chat history from MongoDB for HR's company.
-    """
-    from app.services.mongo_service import mongo_service
+    """Get real-time sign-in/out audit logs and chat history from MongoDB for HR's company."""
     if not current_user.company_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No company associated with user.")
 
     auth_logs = mongo_service.get_company_auth_logs(current_user.company_id, limit=30)
     chat_logs = mongo_service.get_company_chat_history(current_user.company_id, limit=30)
-    is_connected = mongo_service.is_connected()
+    is_connected = mongo_service.is_connected() or db_service.is_connected()
 
     return {
         "mongo_connected": is_connected,
@@ -109,17 +104,11 @@ def get_company_audit_logs(
 @router.post("/my/employees", status_code=status.HTTP_201_CREATED)
 def create_employee_by_hr(
     req: CreateEmployeeRequest,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    current_user: UserDoc = Depends(get_current_user)
 ):
     """
-    Strict HR-Only Action: Create a new employee account directly from the HR Portal.
-    Self-registration by outside parties is disabled; HR assigns credentials to staff.
+    Strict HR-Only Action: Create a new employee account directly from the HR Portal into MongoDB.
     """
-    import uuid
-    from datetime import datetime
-
-
     if current_user.role not in [UserRole.HR.value, UserRole.SUPER_ADMIN.value]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -133,7 +122,7 @@ def create_employee_by_hr(
         )
 
     clean_email = req.email.strip().lower()
-    existing_user = db.query(User).filter(User.email == clean_email).first()
+    existing_user = db_service.get_user_by_email(clean_email)
     if existing_user:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -146,18 +135,15 @@ def create_employee_by_hr(
     if req.title and req.title.strip():
         display_name = f"{display_name} ({req.title.strip()})"
 
-    new_user = User(
-        id=user_id,
-        name=display_name,
-        email=clean_email,
-        password_hash=get_password_hash(emp_password),
-        company_id=current_user.company_id,
-        role=UserRole.EMPLOYEE.value,
-        created_at=datetime.utcnow()
-    )
-    db.add(new_user)
-    db.commit()
-    db.refresh(new_user)
+    new_user = db_service.create_user({
+        "id": user_id,
+        "name": display_name,
+        "email": clean_email,
+        "password_hash": get_password_hash(emp_password),
+        "company_id": current_user.company_id,
+        "role": UserRole.EMPLOYEE.value,
+        "created_at": datetime.utcnow().isoformat()
+    })
 
     # Log employee creation event in MongoDB Atlas
     mongo_service.log_auth_event(
@@ -185,7 +171,7 @@ def create_employee_by_hr(
             "role": new_user.role,
             "company_id": new_user.company_id,
             "company_name": current_user.company.name if current_user.company else None,
-            "created_at": new_user.created_at.isoformat() if new_user.created_at else None
+            "created_at": new_user.created_at
         },
         "credentials": {
             "email": new_user.email,
@@ -197,11 +183,10 @@ def create_employee_by_hr(
 @router.get("/my/employees/{user_id}/chat-history")
 def get_employee_chat_history(
     user_id: str,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    current_user: UserDoc = Depends(get_current_user)
 ):
     """
-    Get past AI assistant conversation history for a specific employee.
+    Get past AI assistant conversation history for a specific employee from MongoDB.
     Enforces strict tenant isolation.
     """
     if current_user.role not in [UserRole.HR.value, UserRole.SUPER_ADMIN.value]:
@@ -210,7 +195,7 @@ def get_employee_chat_history(
             detail="Access Denied: Only HR Managers and Super Admins can inspect employee conversation history."
         )
 
-    target_user = db.query(User).filter(User.id == user_id).first()
+    target_user = db_service.get_user_by_id(user_id)
     if not target_user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -224,44 +209,7 @@ def get_employee_chat_history(
             detail="Tenant Isolation: You cannot view conversations of an employee from another company."
         )
 
-    # 1. Query from Relational Database
-    sql_messages = (
-        db.query(ChatMessage)
-        .filter(ChatMessage.user_id == user_id, ChatMessage.company_id == target_user.company_id)
-        .order_by(ChatMessage.created_at.asc())
-        .limit(100)
-        .all()
-    )
-    conversations = [m.to_dict() for m in sql_messages]
-
-    # 2. If empty in SQL, check MongoDB Atlas as fallback
-    if not conversations and mongo_service.is_connected():
-        try:
-            import pymongo
-            mongo_chats = list(
-                mongo_service.db.chat_conversations.find(
-                    {"user_id": user_id, "company_id": target_user.company_id},
-                    {"_id": 0}
-                )
-                .sort("timestamp", pymongo.ASCENDING)
-                .limit(100)
-            )
-            if mongo_chats:
-                conversations = [
-                    {
-                        "id": f"mongo_{idx}",
-                        "company_id": c.get("company_id"),
-                        "user_id": c.get("user_id"),
-                        "user_name": c.get("user_name"),
-                        "question": c.get("question"),
-                        "answer": c.get("answer"),
-                        "sources": c.get("sources", []),
-                        "created_at": c.get("timestamp")
-                    }
-                    for idx, c in enumerate(mongo_chats)
-                ]
-        except Exception:
-            pass
+    conversations = db_service.get_chat_history(company_id=target_user.company_id, user_id=user_id, limit=100)
 
     return {
         "employee": {
@@ -275,6 +223,3 @@ def get_employee_chat_history(
         "conversations": conversations,
         "total": len(conversations)
     }
-
-
-

@@ -4,7 +4,6 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
-from app.database import init_db, SessionLocal
 from app.services.seed_service import seed_database_and_vectors
 from app.api import auth, companies, documents, chat, admin
 
@@ -13,17 +12,12 @@ logger = logging.getLogger("hr_platform")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: initialize database and seed demo data
-    logger.info(" Initializing Multi-Tenant HR Platform backend...")
-    init_db()
-    
-    db = SessionLocal()
+    # Startup: seed MongoDB Atlas collections and Qdrant vectors
+    logger.info(" Initializing Multi-Tenant HR Platform backend with MongoDB...")
     try:
-        seed_database_and_vectors(db)
+        seed_database_and_vectors()
     except Exception as e:
-        logger.error(f" Error during database seed: {e}")
-    finally:
-        db.close()
+        logger.error(f" Error during MongoDB seed: {e}")
         
     logger.info(" HR Platform backend initialized and ready.")
     yield

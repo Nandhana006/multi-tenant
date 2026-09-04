@@ -1,8 +1,7 @@
 """Database and Vector Store Seeding Service for Demo"""
 import logging
-from datetime import datetime
-from sqlalchemy.orm import Session
-from app.models import Company, User, Document, UserRole, ChatMessage
+from app.models import UserRole
+from app.services.db_service import db_service
 from app.services.auth_service import get_password_hash
 from app.services.document_processor import document_processor
 from app.services.embedding_service import embedding_service
@@ -115,73 +114,45 @@ Full-time staff receive a 40% discount on all artisan confections, sweets, and g
     }
 ]
 
-def seed_database_and_vectors(db: Session):
-    """Seed initial companies, users, and policy documents."""
+def seed_database_and_vectors(db=None):
+    """Seed initial companies, users, and policy documents into MongoDB."""
     logger.info(" Checking database seed data...")
 
     # 1. Seed Companies
     for comp in COMPANIES_DATA:
-        existing = db.query(Company).filter(Company.id == comp["id"]).first()
+        existing = db_service.get_company_by_id(comp["id"])
         if not existing:
-            new_comp = Company(
-                id=comp["id"],
-                name=comp["name"],
-                industry=comp["industry"],
-                invite_code=comp.get("invite_code")
-            )
-            db.add(new_comp)
+            db_service.create_company(comp)
             logger.info(f" Seeded company: {comp['name']}")
-        else:
-            if not existing.invite_code and comp.get("invite_code"):
-                existing.invite_code = comp.get("invite_code")
-    db.commit()
 
-    # 2. Seed Users & Update Names to Indian Personas
+    # 2. Seed Users & Ensure Universal Password
     hashed_pwd = get_password_hash(DEMO_PASSWORD)
     for u in USERS_DATA:
-        existing_user = db.query(User).filter(User.email == u["email"]).first()
-        if not existing_user:
-            new_user = User(
-                id=u["id"],
-                name=u["name"],
-                email=u["email"],
-                password_hash=hashed_pwd,
-                company_id=u["company_id"],
-                role=u["role"]
-            )
-            db.add(new_user)
-            logger.info(f" Seeded user: {u['email']} [{u['role']}]")
-        else:
-            # Ensure password hash is always synchronized and up to date
-            existing_user.password_hash = hashed_pwd
-            existing_user.role = u["role"]
-            existing_user.company_id = u["company_id"]
-            if existing_user.name != u["name"]:
-                existing_user.name = u["name"]
-                logger.info(f" Updated user name to Indian persona: {u['name']}")
-    db.commit()
+        user_data = dict(u)
+        user_data["password_hash"] = hashed_pwd
+        db_service.create_user(user_data)
+        logger.info(f" Seeded user: {u['email']} [{u['role']}]")
 
     # 3. Seed Documents & Vectors
     for doc_data in DEMO_DOCUMENTS:
-        existing_doc = db.query(Document).filter(Document.id == doc_data["doc_id"]).first()
+        existing_doc = db_service.get_document_by_id(doc_data["doc_id"])
         if not existing_doc:
             content = doc_data["content"]
             chunks = document_processor.chunk_text(content)
             embeddings = embedding_service.embed_texts(chunks)
 
-            # Store in DB
-            new_doc = Document(
-                id=doc_data["doc_id"],
-                company_id=doc_data["company_id"],
-                uploaded_by=doc_data["uploaded_by"],
-                filename=doc_data["filename"],
-                file_type="txt",
-                file_size=len(content.encode("utf-8")),
-                chunk_count=len(chunks),
-                status="PROCESSED"
-            )
-            db.add(new_doc)
-            db.commit()
+            # Store in MongoDB
+            new_doc = {
+                "id": doc_data["doc_id"],
+                "company_id": doc_data["company_id"],
+                "uploaded_by": doc_data["uploaded_by"],
+                "filename": doc_data["filename"],
+                "file_type": "txt",
+                "file_size": len(content.encode("utf-8")),
+                "chunk_count": len(chunks),
+                "status": "PROCESSED"
+            }
+            db_service.create_document(new_doc)
 
             # Store in Qdrant
             vector_store.upsert_chunks(
@@ -244,18 +215,6 @@ def seed_database_and_vectors(db: Session):
     ]
 
     for chat in DEMO_CHATS:
-        existing_chat = db.query(ChatMessage).filter(ChatMessage.id == chat["id"]).first()
-        if not existing_chat:
-            new_chat = ChatMessage(
-                id=chat["id"],
-                company_id=chat["company_id"],
-                user_id=chat["user_id"],
-                user_name=chat["user_name"],
-                question=chat["question"],
-                answer=chat["answer"],
-                sources=chat["sources"]
-            )
-            db.add(new_chat)
-    db.commit()
+        db_service.save_chat_message(chat)
 
     logger.info(" Seed verification complete.")

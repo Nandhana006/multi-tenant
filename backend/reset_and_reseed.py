@@ -1,6 +1,6 @@
-"""Database Full Reset and Re-seed Utility
+"""MongoDB Database Full Reset and Re-seed Utility
 
-Drops old users/companies/messages/documents and seeds fresh demo data
+Clears old collections in MongoDB Atlas and seeds fresh demo data
 where EVERY user has the exact same reliable password: 'Demo1234!'
 """
 import sys
@@ -11,40 +11,40 @@ import logging
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
-from app.database import get_engine, SessionLocal
-from app.models import Base, Company, User, Document, ChatMessage
+from app.services.db_service import db_service
 from app.services.seed_service import seed_database_and_vectors, DEMO_PASSWORD, USERS_DATA, COMPANIES_DATA
 from app.services.auth_service import verify_password
 
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("db_reset")
+logger = logging.getLogger("mongo_reset")
 
 def reset_and_reseed():
     print("=" * 70)
-    print(">>> STARTING COMPLETE DATABASE RESET AND RE-SEED")
+    print(">>> STARTING COMPLETE MONGODB ATLAS RESET AND RE-SEED")
     print("=" * 70)
-
-    db = SessionLocal()
 
     try:
         # 1. Clear old records
-        print("\n[1/3] Removing all old records from SQLite database...")
-        db.query(ChatMessage).delete()
-        db.query(Document).delete()
-        db.query(User).delete()
-        db.query(Company).delete()
-        db.commit()
-        print("Done: All old logins, chat messages, and companies removed cleanly.")
+        print("\n[1/3] Removing all old records from MongoDB collections...")
+        db_service.clear_all()
+        print("Done: All old users, companies, chat messages, and documents cleared from MongoDB.")
 
         # 2. Re-create and seed fresh data
-        print("\n[2/3] Seeding fresh companies, users, policies, and chat histories...")
-        seed_database_and_vectors(db)
-        print("Done: Database seeding complete.")
+        print("\n[2/3] Seeding fresh companies, users, policies, and chat histories into MongoDB...")
+        seed_database_and_vectors()
+        print("Done: MongoDB seeding complete.")
 
         # 3. Verify logins
-        print("\n[3/3] Verifying all user credentials and passwords...")
-        all_users = db.query(User).order_by(User.company_id.asc(), User.role.asc()).all()
-        print(f"Total Users in DB: {len(all_users)}")
+        print("\n[3/3] Verifying all user credentials and passwords from MongoDB...")
+        companies = db_service.get_companies()
+        all_users = []
+        for comp in companies:
+            all_users.extend(db_service.get_users_by_company(comp.id))
+        admin = db_service.get_user_by_email("admin@platform.com")
+        if admin:
+            all_users.insert(0, admin)
+
+        print(f"Total Users in MongoDB: {len(all_users)}")
         
         success_count = 0
         for u in all_users:
@@ -57,17 +57,14 @@ def reset_and_reseed():
 
         print("\n" + "=" * 70)
         if success_count == len(all_users):
-            print(f"SUCCESS: ALL {success_count} ACCOUNTS VERIFIED WITH PASSWORD: {DEMO_PASSWORD}")
+            print(f"SUCCESS: ALL {success_count} ACCOUNTS VERIFIED IN MONGODB WITH PASSWORD: {DEMO_PASSWORD}")
         else:
             print(f"WARNING: {success_count}/{len(all_users)} accounts verified.")
         print("=" * 70)
 
     except Exception as e:
-        db.rollback()
-        print(f"\nERROR during reset: {e}")
+        print(f"\nERROR during MongoDB reset: {e}")
         raise e
-    finally:
-        db.close()
 
 if __name__ == "__main__":
     reset_and_reseed()

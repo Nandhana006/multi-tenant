@@ -1,10 +1,8 @@
-"""Authentication API Endpoints"""
+"""Authentication API Endpoints with MongoDB"""
 import uuid
 import re
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy.orm import Session
-from app.database import get_db
-from app.models import User, Company, UserRole
+from app.models import UserRole
 from app.schemas import (
     LoginRequest, 
     RegisterRequest, 
@@ -14,14 +12,15 @@ from app.schemas import (
 )
 from app.services.auth_service import verify_password, get_password_hash, create_access_token
 from app.services.mongo_service import mongo_service
+from app.services.db_service import db_service, UserDoc
 from app.dependencies import get_current_user
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 @router.post("/login", response_model=TokenResponse)
-def login(req: LoginRequest, request: Request, db: Session = Depends(get_db)):
-    """Authenticate user with email/password and return JWT token."""
-    user = db.query(User).filter(User.email == req.email.strip().lower()).first()
+def login(req: LoginRequest, request: Request):
+    """Authenticate user with email/password against MongoDB and return JWT token."""
+    user = db_service.get_user_by_email(req.email)
     if not user or not verify_password(req.password, user.password_hash):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -48,7 +47,6 @@ def login(req: LoginRequest, request: Request, db: Session = Depends(get_db)):
                 detail="Access restricted: Only verified employees may sign in through this portal."
             )
 
-
     token_data = {
         "sub": user.id,
         "email": user.email,
@@ -65,7 +63,7 @@ def login(req: LoginRequest, request: Request, db: Session = Depends(get_db)):
         company_id=user.company_id,
         company_name=user.company.name if user.company else None,
         role=user.role,
-        created_at=user.created_at.isoformat() if user.created_at else None
+        created_at=user.created_at
     )
 
     # Log Sign-In event to MongoDB Atlas
@@ -87,12 +85,12 @@ def login(req: LoginRequest, request: Request, db: Session = Depends(get_db)):
 
 
 @router.post("/register", response_model=TokenResponse)
-def register(req: RegisterRequest, request: Request, db: Session = Depends(get_db)):
+def register(req: RegisterRequest, request: Request):
     """
-    Register an employee account with a valid company invite code or company ID.
+    Register an employee account with a valid company invite code in MongoDB.
     """
     email = req.email.strip().lower()
-    existing_user = db.query(User).filter(User.email == email).first()
+    existing_user = db_service.get_user_by_email(email)
     if existing_user:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -102,19 +100,15 @@ def register(req: RegisterRequest, request: Request, db: Session = Depends(get_d
     # Locate company via invite code or company_id
     company = None
     if req.invite_code and req.invite_code.strip():
-        code = req.invite_code.strip().upper()
-        company = db.query(Company).filter(Company.invite_code == code).first()
-        if not company:
-            # Fallback: check if invite_code was passed as company_id (e.g. comp_apex)
-            company = db.query(Company).filter(Company.id == req.invite_code.strip().lower()).first()
+        company = db_service.get_company_by_invite_code(req.invite_code.strip())
 
     if not company and req.company_id:
-        company = db.query(Company).filter(Company.id == req.company_id.strip()).first()
+        company = db_service.get_company_by_id(req.company_id.strip())
 
     if not company:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid company invite code. Please enter a valid invite code (e.g. APEX-2026, NEXUS-2026, GLOBAL-2026) provided by your HR."
+            detail="Invalid company invite code. Please enter a valid invite code (e.g. POLCA-2026, APEX-2026, NEXUS-2026, GLOBAL-2026)."
         )
 
     user_role = UserRole.EMPLOYEE.value
@@ -122,17 +116,14 @@ def register(req: RegisterRequest, request: Request, db: Session = Depends(get_d
         user_role = req.role.upper()
 
     user_id = f"user_{uuid.uuid4().hex[:10]}"
-    new_user = User(
-        id=user_id,
-        name=req.name.strip(),
-        email=email,
-        password_hash=get_password_hash(req.password),
-        company_id=company.id,
-        role=user_role
-    )
-    db.add(new_user)
-    db.commit()
-    db.refresh(new_user)
+    new_user = db_service.create_user({
+        "id": user_id,
+        "name": req.name.strip(),
+        "email": email,
+        "password_hash": get_password_hash(req.password),
+        "company_id": company.id,
+        "role": user_role
+    })
 
     token_data = {
         "sub": new_user.id,
@@ -150,7 +141,7 @@ def register(req: RegisterRequest, request: Request, db: Session = Depends(get_d
         company_id=company.id,
         company_name=company.name,
         role=new_user.role,
-        created_at=new_user.created_at.isoformat() if new_user.created_at else None
+        created_at=new_user.created_at
     )
 
     client_ip = request.client.host if request.client else "127.0.0.1"
@@ -170,15 +161,14 @@ def register(req: RegisterRequest, request: Request, db: Session = Depends(get_d
     return TokenResponse(access_token=access_token, user=user_resp)
 
 
-
 @router.post("/register-company", response_model=TokenResponse)
-def register_company(req: RegisterCompanyRequest, request: Request, db: Session = Depends(get_db)):
+def register_company(req: RegisterCompanyRequest, request: Request):
     """
-    Onboard a brand new company tenant with its own isolated data partition
+    Onboard a brand new company tenant into MongoDB Atlas
     and create the initial HR Manager account for that company.
     """
     admin_email = req.admin_email.strip().lower()
-    existing_user = db.query(User).filter(User.email == admin_email).first()
+    existing_user = db_service.get_user_by_email(admin_email)
     if existing_user:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -189,36 +179,30 @@ def register_company(req: RegisterCompanyRequest, request: Request, db: Session 
     base_slug = re.sub(r'[^a-zA-Z0-9]', '_', req.company_name.lower().strip())
     slug = f"comp_{base_slug[:12]}"
     
-    # Ensure uniqueness
     counter = 1
     company_id = slug
-    while db.query(Company).filter(Company.id == company_id).first():
+    while db_service.get_company_by_id(company_id):
         company_id = f"{slug}_{counter}"
         counter += 1
 
     invite_code = f"{base_slug[:6].upper()}-{uuid.uuid4().hex[:4].upper()}"
-    new_company = Company(
-        id=company_id,
-        name=req.company_name.strip(),
-        industry=req.industry.strip() if req.industry else "Enterprise",
-        invite_code=invite_code
-    )
-    db.add(new_company)
-    db.commit()
+    new_company = db_service.create_company({
+        "id": company_id,
+        "name": req.company_name.strip(),
+        "industry": req.industry.strip() if req.industry else "Enterprise",
+        "invite_code": invite_code
+    })
 
     # Create the HR admin user for this company
     user_id = f"user_{uuid.uuid4().hex[:10]}"
-    new_user = User(
-        id=user_id,
-        name=req.admin_name.strip(),
-        email=admin_email,
-        password_hash=get_password_hash(req.admin_password),
-        company_id=new_company.id,
-        role=UserRole.HR.value
-    )
-    db.add(new_user)
-    db.commit()
-    db.refresh(new_user)
+    new_user = db_service.create_user({
+        "id": user_id,
+        "name": req.admin_name.strip(),
+        "email": admin_email,
+        "password_hash": get_password_hash(req.admin_password),
+        "company_id": new_company.id,
+        "role": UserRole.HR.value
+    })
 
     token_data = {
         "sub": new_user.id,
@@ -236,7 +220,7 @@ def register_company(req: RegisterCompanyRequest, request: Request, db: Session 
         company_id=new_user.company_id,
         company_name=new_company.name,
         role=new_user.role,
-        created_at=new_user.created_at.isoformat() if new_user.created_at else None
+        created_at=new_user.created_at
     )
 
     # Log Register Company to MongoDB Atlas
@@ -257,7 +241,7 @@ def register_company(req: RegisterCompanyRequest, request: Request, db: Session 
     return TokenResponse(access_token=access_token, user=user_resp)
 
 @router.post("/logout")
-def logout(request: Request, current_user: User = Depends(get_current_user)):
+def logout(request: Request, current_user: UserDoc = Depends(get_current_user)):
     """Log user sign out event into MongoDB audit collection."""
     client_ip = request.client.host if request.client else "127.0.0.1"
     user_agent = request.headers.get("user-agent", "Web Browser")
@@ -275,8 +259,8 @@ def logout(request: Request, current_user: User = Depends(get_current_user)):
     return {"message": "Signed out successfully", "logged": True}
 
 @router.get("/me", response_model=UserResponse)
-def get_me(current_user: User = Depends(get_current_user)):
-    """Return currently authenticated user info."""
+def get_me(current_user: UserDoc = Depends(get_current_user)):
+    """Return currently authenticated user info from MongoDB."""
     return UserResponse(
         id=current_user.id,
         name=current_user.name,
@@ -284,6 +268,5 @@ def get_me(current_user: User = Depends(get_current_user)):
         company_id=current_user.company_id,
         company_name=current_user.company.name if current_user.company else None,
         role=current_user.role,
-        created_at=current_user.created_at.isoformat() if current_user.created_at else None
+        created_at=current_user.created_at
     )
-
