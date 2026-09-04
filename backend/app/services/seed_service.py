@@ -4,8 +4,6 @@ from app.models import UserRole
 from app.services.db_service import db_service
 from app.services.auth_service import get_password_hash
 from app.services.document_processor import document_processor
-from app.services.embedding_service import embedding_service
-from app.services.vector_store import vector_store
 
 logger = logging.getLogger(__name__)
 
@@ -133,15 +131,14 @@ def seed_database_and_vectors(db=None):
         db_service.create_user(user_data)
         logger.info(f" Seeded user: {u['email']} [{u['role']}]")
 
-    # 3. Seed Documents & Vectors
+    # 3. Seed Documents (Metadata into MongoDB; vectors already exist in Qdrant)
     for doc_data in DEMO_DOCUMENTS:
         existing_doc = db_service.get_document_by_id(doc_data["doc_id"])
         if not existing_doc:
             content = doc_data["content"]
             chunks = document_processor.chunk_text(content)
-            embeddings = embedding_service.embed_texts(chunks)
 
-            # Store in MongoDB
+            # Store in MongoDB without invoking heavy embedding models during startup
             new_doc = {
                 "id": doc_data["doc_id"],
                 "company_id": doc_data["company_id"],
@@ -153,17 +150,7 @@ def seed_database_and_vectors(db=None):
                 "status": "PROCESSED"
             }
             db_service.create_document(new_doc)
-
-            # Store in Qdrant
-            vector_store.upsert_chunks(
-                company_id=doc_data["company_id"],
-                document_id=doc_data["doc_id"],
-                document_name=doc_data["filename"],
-                uploaded_by=doc_data["uploaded_by"],
-                chunks=chunks,
-                embeddings=embeddings
-            )
-            logger.info(f" Seeded document & {len(chunks)} vectors: {doc_data['filename']}")
+            logger.info(f" Seeded document: {doc_data['filename']} ({len(chunks)} chunks)")
 
     # 4. Seed Employee AI Conversation History
     DEMO_CHATS = [
